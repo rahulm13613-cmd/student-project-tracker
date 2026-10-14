@@ -8,86 +8,43 @@ const cancelButton = document.getElementById("cancel-button");
 const formTitle = document.getElementById("form-title");
 const message = document.getElementById("message");
 
-const STORAGE_KEY = "workshop-projects-v1";
-
 let projects = [];
 let editingId = null;
-let storageAvailable = true;
 
 function showMessage(text) {
   message.textContent = text;
 }
 
-function loadProjects() {
-  let savedText;
-
-  try {
-    savedText = localStorage.getItem(STORAGE_KEY);
-  } catch (error) {
-    storageAvailable = false;
-    showMessage("Could not read saved projects from browser storage.");
-    return;
-  }
-
-  if (savedText === null) {
-    projects = [];
-    return;
-  }
-
-  try {
-    const savedProjects = JSON.parse(savedText);
-
-    const validProjects =
-      Array.isArray(savedProjects) &&
-      savedProjects.every(
-        (project) =>
-          project !== null &&
-          typeof project === "object" &&
-          typeof project.id === "string" &&
-          typeof project.name === "string" &&
-          typeof project.status === "string"
-      );
-
-    if (!validProjects) {
-      storageAvailable = false;
-      showMessage(
-        "Saved project data is invalid. Your saved data has not been overwritten."
-      );
-      projects = [];
-      return;
+async function apiRequest(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers
     }
+  });
 
-    projects = savedProjects;
-  } catch (error) {
-    storageAvailable = false;
-    showMessage(
-      "Saved project data could not be read. Your saved data has not been overwritten."
-    );
-    projects = [];
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "Request failed.");
   }
+
+  return data;
 }
 
-function saveProjects() {
+async function loadProjects() {
   try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(projects)
-    );
-
-    storageAvailable = true;
-    showMessage("Changes saved in this browser.");
-    return true;
+    projects = await apiRequest("/api/projects");
+    displayProjects();
+    showMessage("Projects loaded from the database.");
   } catch (error) {
-    showMessage(
-      "Changes could not be saved in browser storage."
-    );
-    return false;
+    showMessage("Could not load projects: " + error.message);
   }
 }
 
 function displayProjects() {
   projectList.replaceChildren();
-
   emptyState.hidden = projects.length > 0;
 
   projects.forEach((project) => {
@@ -98,13 +55,11 @@ function displayProjects() {
 
     details.textContent = `${project.name} — ${project.status}`;
 
-    // Edit button
     editButton.textContent = "Edit";
     editButton.type = "button";
 
     editButton.addEventListener("click", () => {
       editingId = project.id;
-
       nameInput.value = project.name;
       statusInput.value = project.status;
 
@@ -112,62 +67,44 @@ function displayProjects() {
       cancelButton.hidden = false;
       formTitle.textContent = "Edit a project";
 
-      showMessage("Editing project. Your changes are not saved yet.");
+      showMessage("Editing project. Submit to save changes.");
       nameInput.focus();
     });
 
-    // Delete button
     deleteButton.textContent = "Delete";
     deleteButton.type = "button";
 
-    deleteButton.addEventListener("click", () => {
-      const confirmed = window.confirm(
-        `Are you sure you want to delete "${project.name}"?`
-      );
-
-      if (!confirmed) {
+    deleteButton.addEventListener("click", async () => {
+      if (!window.confirm(`Delete "${project.name}"?`)) {
         return;
       }
 
-      const previousProjects = projects;
+      try {
+        await apiRequest(`/api/projects/${project.id}`, {
+          method: "DELETE"
+        });
 
-      projects = projects.filter(
-        (item) => item.id !== project.id
-      );
-
-      if (!saveProjects()) {
-        projects = previousProjects;
-        displayProjects();
-        return;
+        await loadProjects();
+        showMessage("Project deleted successfully.");
+      } catch (error) {
+        showMessage("Could not delete project: " + error.message);
       }
-
-      // If the deleted project is being edited, exit Edit mode.
-      if (editingId === project.id) {
-        resetForm();
-      }
-
-      displayProjects();
     });
 
-    item.appendChild(details);
-    item.appendChild(editButton);
-    item.appendChild(deleteButton);
-
+    item.append(details, editButton, deleteButton);
     projectList.appendChild(item);
   });
 }
 
 function resetForm() {
   form.reset();
-
   editingId = null;
-
   saveButton.textContent = "Add project";
   cancelButton.hidden = true;
   formTitle.textContent = "Add a project";
 }
 
-form.addEventListener("submit", (event) => {
+form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const name = nameInput.value.trim();
@@ -178,48 +115,35 @@ form.addEventListener("submit", (event) => {
     return;
   }
 
-  const previousProjects = projects.map((project) => ({
-    ...project
-  }));
+  const project = { name, status };
 
-  if (editingId !== null) {
-    const project = projects.find(
-      (item) => item.id === editingId
-    );
+  try {
+    if (editingId !== null) {
+      await apiRequest(`/api/projects/${editingId}`, {
+        method: "PUT",
+        body: JSON.stringify(project)
+      });
 
-    if (!project) {
-      showMessage("This project could not be found.");
-      resetForm();
-      displayProjects();
-      return;
+      showMessage("Project updated successfully.");
+    } else {
+      await apiRequest("/api/projects", {
+        method: "POST",
+        body: JSON.stringify(project)
+      });
+
+      showMessage("Project added successfully.");
     }
 
-    project.name = name;
-    project.status = status;
-  } else {
-    const project = {
-      id: crypto.randomUUID(),
-      name: name,
-      status: status
-    };
-
-    projects.push(project);
+    resetForm();
+    await loadProjects();
+  } catch (error) {
+    showMessage("Could not save project: " + error.message);
   }
-
-  if (!saveProjects()) {
-    projects = previousProjects;
-    displayProjects();
-    return;
-  }
-
-  displayProjects();
-  resetForm();
 });
 
 cancelButton.addEventListener("click", () => {
   resetForm();
-  showMessage("Edit cancelled. Saved project data is unchanged.");
+  showMessage("Edit cancelled.");
 });
 
 loadProjects();
-displayProjects();
